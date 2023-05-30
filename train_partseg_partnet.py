@@ -18,16 +18,17 @@ from tqdm import tqdm
 from dataset import PartNormalDataset
 import hydra
 import omegaconf
+from PartNetSegPCMultiClassDataset import PartNetSegPCMultiClassDataset
 
 
-seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
-               'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
-               'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
-               'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
-seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
-for cat in seg_classes.keys():
-    for label in seg_classes[cat]:
-        seg_label_to_cat[label] = cat
+# seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
+#                'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
+#                'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
+#                'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
+# seg_label_to_cat = {}  # {0:Airplane, 1:Airplane, ...49:Table}
+# for cat in seg_classes.keys():
+#     for label in seg_classes[cat]:
+#         seg_label_to_cat[label] = cat
 
 
 def inplace_relu(m):
@@ -42,7 +43,7 @@ def to_categorical(y, num_classes):
         return new_y.cuda()
     return new_y
 
-@hydra.main(config_path='config', config_name='partseg')
+@hydra.main(config_path='config', config_name='partseg_partnet')
 def main(args):
     omegaconf.OmegaConf.set_struct(args, False)
 
@@ -53,18 +54,34 @@ def main(args):
     # print(args.pretty())
     print(args)
 
-    root = hydra.utils.to_absolute_path('data/shapenetcore_partanno_segmentation_benchmark_v0_normal/')
-
-    TRAIN_DATASET = PartNormalDataset(root=root, npoints=args.num_point, split='trainval', normal_channel=args.normal)
-    trainDataLoader = torch.utils.data.DataLoader(TRAIN_DATASET, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
-    TEST_DATASET = PartNormalDataset(root=root, npoints=args.num_point, split='test', normal_channel=args.normal)
-    testDataLoader = torch.utils.data.DataLoader(TEST_DATASET, batch_size=args.batch_size, shuffle=False, num_workers=10)
+    full_dataset = PartNetSegPCMultiClassDataset(args.data_dir, partial=False, rotate='None', keep_object_classes=args.keep_object_classes, ndf_scale=args.ndf_scale)
+    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [int(len(full_dataset) * 0.7), len(full_dataset) - int(len(full_dataset) * 0.7)], generator=torch.Generator().manual_seed(args.random_seed))
+    trainDataLoader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=10, drop_last=True)
+    testDataLoader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
     '''MODEL LOADING'''
-    args.input_dim = (6 if args.normal else 3) + 16
-    args.num_class = 50
-    num_category = 16
+    args.input_dim = 3 + full_dataset.get_num_class()
+    args.num_class = len(full_dataset.get_parts())
+    num_category = full_dataset.get_num_class()
     num_part = args.num_class
+
+    seg_classes = {}
+    # seg_classes = {'Earphone': [16, 17, 18], 'Motorbike': [30, 31, 32, 33, 34, 35], 'Rocket': [41, 42, 43],
+    #                'Car': [8, 9, 10, 11], 'Laptop': [28, 29], 'Cap': [6, 7], 'Skateboard': [44, 45, 46], 'Mug': [36, 37],
+    #                'Guitar': [19, 20, 21], 'Bag': [4, 5], 'Lamp': [24, 25, 26, 27], 'Table': [47, 48, 49],
+    #                'Airplane': [0, 1, 2, 3], 'Pistol': [38, 39, 40], 'Chair': [12, 13, 14, 15], 'Knife': [22, 23]}
+    for obj_cls in full_dataset.obj_cls_to_part_paths:
+        for part_path in full_dataset.obj_cls_to_part_paths[obj_cls]:
+            if obj_cls not in seg_classes:
+                seg_classes[obj_cls] = []
+            seg_classes[obj_cls].append(full_dataset.part_path_to_idx[part_path])
+    seg_label_to_cat = {}
+    # {0:Airplane, 1:Airplane, ...49:Table}
+    for cat in seg_classes.keys():
+        for label in seg_classes[cat]:
+            assert label not in seg_label_to_cat, "Part labels cannot be shared between object classes"
+            seg_label_to_cat[label] = cat
+
     shutil.copy(hydra.utils.to_absolute_path('models/{}/model.py'.format(args.model.name)), '.')
 
     classifier = getattr(importlib.import_module('models.{}.model'.format(args.model.name)), 'PointTransformerSeg')(args).cuda()
@@ -136,7 +153,7 @@ def main(args):
             pred_choice = seg_pred.data.max(1)[1]  # equal to argmax
 
             correct = pred_choice.eq(target.data).cpu().sum()
-            mean_correct.append(correct.item() / (args.batch_size * args.num_point))
+            mean_correct.append(correct.item() / (args.batch_size * args.num_pts))
             loss = criterion(seg_pred, target)  # cross entropy
             loss.backward()
             optimizer.step()

@@ -4,6 +4,8 @@ from torch.utils.data import Dataset
 import torch
 from pointnet_util import farthest_point_sample, pc_normalize
 import json
+import trimesh
+import matplotlib
 
 
 class ModelNetDataLoader(Dataset):
@@ -163,9 +165,57 @@ class PartNormalDataset(Dataset):
         return len(self.datapath)
 
 
+def visualize_part_segmentation(pc, seg_labels, return_vis_pc=False):
+
+    vis_pc = trimesh.PointCloud(pc[:, :3], colors=[0,0,0,255])
+    # print(vis_pc.colors.shape)
+    unique_labels = np.unique(seg_labels)
+    colors = get_rgb_colors()
+    for li, l in enumerate(unique_labels):
+        color = colors[li][1]
+        color = [int(c) * 255 for c in color] + [255]
+        vis_pc.colors[seg_labels == l] = color
+    if return_vis_pc:
+        return vis_pc
+    vis_pc.show()
+
+
+def get_rgb_colors():
+    rgb_colors = []
+    # each color is a tuple of (name, (r,g,b))
+    for name, hex in matplotlib.colors.cnames.items():
+        rgb_colors.append((name, matplotlib.colors.to_rgb(hex)))
+
+    rgb_colors = sorted(rgb_colors, key=lambda x: x[0])
+
+    priority_colors = [('red', (1.0, 0.0, 0.0)), ('green', (0.0, 1.0, 0.0)), ('blue', (0.0, 0.0, 1.0)),
+                       ('orange', (1.0, 0.6470588235294118, 0.0)),
+                       ('purple', (0.5019607843137255, 0.0, 0.5019607843137255)), ('magenta', (1.0, 0.0, 1.0)), ]
+    rgb_colors = priority_colors + rgb_colors
+
+    return rgb_colors
+
+
 if __name__ == '__main__':
-    data = ModelNetDataLoader('modelnet40_normal_resampled/', split='train', uniform=False, normal_channel=True)
-    DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
-    for point,label in DataLoader:
-        print(point.shape)
-        print(label.shape)
+    # data = ModelNetDataLoader('modelnet40_normal_resampled/', split='train', uniform=False, normal_channel=True)
+    # DataLoader = torch.utils.data.DataLoader(data, batch_size=12, shuffle=True)
+    # for point,label in DataLoader:
+    #     print(point.shape)
+    #     print(label.shape)
+
+    data = PartNormalDataset(root='data/shapenetcore_partanno_segmentation_benchmark_v0_normal/', npoints=1024,
+                             split='test', normal_channel=True,
+                             class_choice=["Mug"])
+    # ['Earphone', 'Motorbike', 'Rocket', 'Car', 'Laptop', 'Cap', 'Skateboard', 'Mug', 'Guitar', 'Bag', 'Lamp', 'Table', 'Airplane', 'Pistol', 'Chair', 'Knife']
+    DataLoader = torch.utils.data.DataLoader(data, batch_size=1, shuffle=True)
+    for pc, cls, seg in DataLoader:
+        print(pc.shape)
+        print(cls.shape)
+        print(seg.shape)
+
+        visualize_part_segmentation(pc[0], seg[0])
+
+        # tpc = trimesh.PointCloud(pc[:, :3])
+        # tpc.show()
+
+        # input("next?")

@@ -1,0 +1,27 @@
+batch_size: 16
+epoch: 200
+learning_rate: 1e-3
+gpu: 0
+num_point: 1500
+optimizer: Adam
+weight_decay: 1e-4
+lr_decay: 0.5
+step_size: 20
+ndf_scale: False
+random_seed: 42
+data_dir: /home/weiyu/data_drive/shapenet/partnet/pc_seg
+keep_object_classes:
+  - Bottle
+  - Bowl
+  - Mug
+
+defaults:
+  - model: Hengshuang
+
+hydra:
+  run:
+    dir: log/partseg_partnet/${model.name}
+
+  sweep:
+    dir: log/partseg
+    subdir: ${model.name}
